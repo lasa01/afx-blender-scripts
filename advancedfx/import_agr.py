@@ -219,9 +219,15 @@ class ModelHandle:
 		self.objNr = objNr
 		self.modelName = modelName
 		self.modelData = False
+		self.lastInvisible = 1
 		self.lastRenderOrigin = None
+		self.skippedRenderOrigin = False
 		self.lastRenderRotQuat = None
+		self.skippedRenderRotQuat = False
+		self.boneLastRenderOrigins = {}
+		self.boneSkippedRenderOrigins = defaultdict(lambda: False)
 		self.boneLastRenderRotQuats = {}
+		self.boneSkippedRenderRotQuats = defaultdict(lambda: False)
 
 		# We are lazy, so we use frame 0 to set as not visible (initially) / hide_render 1:
 		self.visibilityFrames = [0, 1]
@@ -252,6 +258,12 @@ class CameraData:
 		self.o = o
 		self.c = c
 		self.curves = []
+		self.lastRenderOrigin = None
+		self.skippedRenderOrigin = False
+		self.lastRenderRotQuat = None
+		self.skippedRenderRotQuat = False
+		self.lastLens = None
+		self.skippedLens = False
 
 		self.locationXFrames = []
 		self.locationYFrames = []
@@ -351,6 +363,12 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 			('BEZIER', "Bezier (fast import)", "Smooth interpolation"),
 		],
 		default='CONSTANT'
+	)
+	
+	skipDuplicateKeyframes: bpy.props.BoolProperty(
+		name="Skip duplicate keyframes",
+		description="Skips duplicate keyframes when the previous frame has the same value.",
+		default = False
 	)
 	
 	# class properties
@@ -622,10 +640,10 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 				
 			timeConverter = AgrTimeConverter(context)
 			currentTime = timeConverter.GetTime()
+			previousTime = None
 			dict = AgrDictionary()
 			handleToLastModelHandle = {}
 			unusedModelHandles = []
-			lastCameraQuat = None
 			camData = None
 			
 			modelHandles = []
@@ -657,6 +675,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 					frameTime = ReadFloat(file)
 					
 					timeConverter.Frame(frameTime)
+					previousTime = currentTime
 					currentTime = timeConverter.GetTime()
 					
 					afxHiddenOffset = ReadInt(file)
@@ -765,14 +784,11 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 							
 							handleToLastModelHandle[handle] = modelHandle
 							
-						modelHandle.lastRenderOrigin = renderOrigin
-						
 						# make sure we take the shortest path:
 						if modelHandle.lastRenderRotQuat is not None:
 							dot = modelHandle.lastRenderRotQuat.dot(renderRotQuat)
 							if dot < 0:
 								renderRotQuat.negate()
-						modelHandle.lastRenderRotQuat = renderRotQuat
 						
 						modelData = modelHandle.modelData
 						if modelData is False:
@@ -784,23 +800,63 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 							
 							#vs_utils.select_only( modelData.smd.a )
 							invisible = 0 if visible else 1
-							
-							if self.interKey:
-								afx_utils.AppendInterKeys_Visible(currentTime, invisible, modelHandle.visibilityFrames)
-								afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelHandle.locationXFrames, modelHandle.locationYFrames, modelHandle.locationZFrames)
-								afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.rotationWFrames, modelHandle.rotationXFrames, modelHandle.rotationYFrames, modelHandle.rotationZFrames)
-							
-							modelHandle.visibilityFrames.extend((currentTime, invisible))
-							
-							modelHandle.locationXFrames.extend((currentTime, renderOrigin.x))
-							modelHandle.locationYFrames.extend((currentTime, renderOrigin.y))
-							modelHandle.locationZFrames.extend((currentTime, renderOrigin.z))
-							
-							modelHandle.rotationWFrames.extend((currentTime, renderRotQuat.w))
-							modelHandle.rotationXFrames.extend((currentTime, renderRotQuat.x))
-							modelHandle.rotationYFrames.extend((currentTime, renderRotQuat.y))
-							modelHandle.rotationZFrames.extend((currentTime, renderRotQuat.z))
-							
+							if self.skipDuplicateKeyframes:
+								if invisible != modelHandle.lastInvisible:
+									modelHandle.visibilityFrames.extend((currentTime, invisible))
+								
+								if modelHandle.lastRenderOrigin is not None and (renderOrigin-modelHandle.lastRenderOrigin).length < 1e-4:
+									modelHandle.skippedRenderOrigin = True
+								else:
+									if modelHandle.skippedRenderOrigin:
+										modelHandle.locationXFrames.extend((previousTime, modelHandle.lastRenderOrigin.x))
+										modelHandle.locationYFrames.extend((previousTime, modelHandle.lastRenderOrigin.y))
+										modelHandle.locationZFrames.extend((previousTime, modelHandle.lastRenderOrigin.z))
+										modelHandle.skippedRenderOrigin = False
+									if self.interKey:
+										afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelHandle.locationXFrames, modelHandle.locationYFrames, modelHandle.locationZFrames)
+									modelHandle.locationXFrames.extend((currentTime, renderOrigin.x))
+									modelHandle.locationYFrames.extend((currentTime, renderOrigin.y))
+									modelHandle.locationZFrames.extend((currentTime, renderOrigin.z))
+									modelHandle.lastRenderOrigin = renderOrigin
+								
+								if modelHandle.lastRenderRotQuat is not None and (renderRotQuat-modelHandle.lastRenderRotQuat).magnitude < 1e-4:
+									modelHandle.skippedRenderRotQuat = True
+								else:
+									if modelHandle.skippedRenderRotQuat:
+										modelHandle.rotationWFrames.extend((previousTime, modelHandle.lastRenderRotQuat.w))
+										modelHandle.rotationXFrames.extend((previousTime, modelHandle.lastRenderRotQuat.x))
+										modelHandle.rotationYFrames.extend((previousTime, modelHandle.lastRenderRotQuat.y))
+										modelHandle.rotationZFrames.extend((previousTime, modelHandle.lastRenderRotQuat.z))
+										modelHandle.skippedRenderRotQuat = False
+									if self.interKey:
+										afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.rotationWFrames, modelHandle.rotationXFrames, modelHandle.rotationYFrames, modelHandle.rotationZFrames)
+									modelHandle.rotationWFrames.extend((currentTime, renderRotQuat.w))
+									modelHandle.rotationXFrames.extend((currentTime, renderRotQuat.x))
+									modelHandle.rotationYFrames.extend((currentTime, renderRotQuat.y))
+									modelHandle.rotationZFrames.extend((currentTime, renderRotQuat.z))
+									modelHandle.lastRenderRotQuat = renderRotQuat
+								
+								modelHandle.lastInvisible = invisible
+							else:
+								if self.interKey:
+									afx_utils.AppendInterKeys_Visible(currentTime, invisible, modelHandle.visibilityFrames)
+									afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelHandle.locationXFrames, modelHandle.locationYFrames, modelHandle.locationZFrames)
+									afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.rotationWFrames, modelHandle.rotationXFrames, modelHandle.rotationYFrames, modelHandle.rotationZFrames)
+								
+								modelHandle.visibilityFrames.extend((currentTime, invisible))
+								
+								modelHandle.locationXFrames.extend((currentTime, renderOrigin.x))
+								modelHandle.locationYFrames.extend((currentTime, renderOrigin.y))
+								modelHandle.locationZFrames.extend((currentTime, renderOrigin.z))
+								
+								modelHandle.rotationWFrames.extend((currentTime, renderRotQuat.w))
+								modelHandle.rotationXFrames.extend((currentTime, renderRotQuat.x))
+								modelHandle.rotationYFrames.extend((currentTime, renderRotQuat.y))
+								modelHandle.rotationZFrames.extend((currentTime, renderRotQuat.z))
+								
+								modelHandle.lastRenderOrigin = renderOrigin
+								modelHandle.lastRenderRotQuat = renderRotQuat
+						
 					if dict.Peekaboo(file,'baseanimating'):
 						#skin = ReadInt(file)
 						#body = ReadInt(file)
@@ -836,28 +892,67 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 									bone.matrix = matrix
 									
 									renderRotQuat = bone.rotation_quaternion.copy()
+									renderOrigin = bone.location.copy()
+									
+									lastRenderRotQuat = modelHandle.boneLastRenderRotQuats.get(i, None)
 									
 									# make sure we take the shortest path:
-									if i in modelHandle.boneLastRenderRotQuats:
-										dot = modelHandle.boneLastRenderRotQuats[i].dot(renderRotQuat)
+									if lastRenderRotQuat is not None:
+										dot = lastRenderRotQuat.dot(renderRotQuat)
 										if dot < 0:
 											renderRotQuat.negate()
-									modelHandle.boneLastRenderRotQuats[i] = renderRotQuat
 									
 									#vs_utils.select_only( modelData.smd.a )
 									
-									if self.interKey:
-										afx_utils.AppendInterKeys_Location(currentTime, bone.location, modelHandle.boneLocationXFrames[i], modelHandle.boneLocationYFrames[i], modelHandle.boneLocationZFrames[i])
-										afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.boneRotationWFrames[i], modelHandle.boneRotationXFrames[i], modelHandle.boneRotationYFrames[i], modelHandle.boneRotationZFrames[i])
+									if self.skipDuplicateKeyframes:
+										lastRenderOrigin = modelHandle.boneLastRenderOrigins.get(i, None)
+										if lastRenderOrigin is not None and (renderOrigin-lastRenderOrigin).length < 1e-4:
+											modelHandle.boneSkippedRenderOrigins[i] = True
+										else:
+											if modelHandle.boneSkippedRenderOrigins[i]:
+												modelHandle.boneLocationXFrames[i].extend((previousTime, lastRenderOrigin.x))
+												modelHandle.boneLocationYFrames[i].extend((previousTime, lastRenderOrigin.y))
+												modelHandle.boneLocationZFrames[i].extend((previousTime, lastRenderOrigin.z))
+												modelHandle.boneSkippedRenderOrigins[i] = False
+											if self.interKey:
+												afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelHandle.boneLocationXFrames[i], modelHandle.boneLocationYFrames[i], modelHandle.boneLocationZFrames[i])
+											modelHandle.boneLocationXFrames[i].extend((currentTime, renderOrigin.x))
+											modelHandle.boneLocationYFrames[i].extend((currentTime, renderOrigin.y))
+											modelHandle.boneLocationZFrames[i].extend((currentTime, renderOrigin.z))
+											modelHandle.boneLastRenderOrigins[i] = renderOrigin
+										
+										if lastRenderRotQuat is not None and (renderRotQuat-lastRenderRotQuat).magnitude < 1e-4:
+											modelHandle.boneSkippedRenderRotQuats[i] = True
+										else:
+											if modelHandle.boneSkippedRenderRotQuats[i]:
+												modelHandle.boneRotationWFrames[i].extend((previousTime, lastRenderRotQuat.w))
+												modelHandle.boneRotationXFrames[i].extend((previousTime, lastRenderRotQuat.x))
+												modelHandle.boneRotationYFrames[i].extend((previousTime, lastRenderRotQuat.y))
+												modelHandle.boneRotationZFrames[i].extend((previousTime, lastRenderRotQuat.z))
+												modelHandle.boneSkippedRenderRotQuats[i] = False
+											if self.interKey:
+												afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.boneRotationWFrames[i], modelHandle.boneRotationXFrames[i], modelHandle.boneRotationYFrames[i], modelHandle.boneRotationZFrames[i])
+											modelHandle.boneRotationWFrames[i].extend((currentTime, renderRotQuat.w))
+											modelHandle.boneRotationXFrames[i].extend((currentTime, renderRotQuat.x))
+											modelHandle.boneRotationYFrames[i].extend((currentTime, renderRotQuat.y))
+											modelHandle.boneRotationZFrames[i].extend((currentTime, renderRotQuat.z))
+											modelHandle.boneLastRenderRotQuats[i] = renderRotQuat
 									
-									modelHandle.boneLocationXFrames[i].extend((currentTime, bone.location.x))
-									modelHandle.boneLocationYFrames[i].extend((currentTime, bone.location.y))
-									modelHandle.boneLocationZFrames[i].extend((currentTime, bone.location.z))
-									
-									modelHandle.boneRotationWFrames[i].extend((currentTime, renderRotQuat.w))
-									modelHandle.boneRotationXFrames[i].extend((currentTime, renderRotQuat.x))
-									modelHandle.boneRotationYFrames[i].extend((currentTime, renderRotQuat.y))
-									modelHandle.boneRotationZFrames[i].extend((currentTime, renderRotQuat.z))
+									else:
+										if self.interKey:
+											afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelHandle.boneLocationXFrames[i], modelHandle.boneLocationYFrames[i], modelHandle.boneLocationZFrames[i])
+											afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelHandle.boneRotationWFrames[i], modelHandle.boneRotationXFrames[i], modelHandle.boneRotationYFrames[i], modelHandle.boneRotationZFrames[i])
+										
+										modelHandle.boneLocationXFrames[i].extend((currentTime, renderOrigin.x))
+										modelHandle.boneLocationYFrames[i].extend((currentTime, renderOrigin.y))
+										modelHandle.boneLocationZFrames[i].extend((currentTime, renderOrigin.z))
+										
+										modelHandle.boneRotationWFrames[i].extend((currentTime, renderRotQuat.w))
+										modelHandle.boneRotationXFrames[i].extend((currentTime, renderRotQuat.x))
+										modelHandle.boneRotationYFrames[i].extend((currentTime, renderRotQuat.y))
+										modelHandle.boneRotationZFrames[i].extend((currentTime, renderRotQuat.z))
+										
+										modelHandle.boneLastRenderRotQuats[i] = renderRotQuat
 					
 					dict.Peekaboo(file,'/')
 					
@@ -888,30 +983,75 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 					renderRotQuat = renderAngles.to_quaternion() @ self.blenderCamUpQuat
 					
 					# make sure we take the shortest path:
-					if lastCameraQuat is not None:
-						dot = lastCameraQuat.dot(renderRotQuat)
+					if camData.lastRenderRotQuat is not None:
+						dot = camData.lastRenderRotQuat.dot(renderRotQuat)
 						if dot < 0:
 							renderRotQuat.negate()
-					lastCameraQuat = renderRotQuat
 					
 					#vs_utils.select_only( camData.o )
 					
-					if self.interKey:
-						afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, camData.locationXFrames, camData.locationYFrames, camData.locationZFrames)
-						afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, camData.rotationWFrames, camData.rotationXFrames, camData.rotationYFrames, camData.rotationZFrames)
-						afx_utils.AppendInterKeys_Value(currentTime, lens, camData.lensFrames)
+					if self.skipDuplicateKeyframes:
+						if camData.lastRenderOrigin is not None and (renderOrigin-camData.lastRenderOrigin).length < 1e-4:
+							camData.skippedRenderOrigin = True
+						else:
+							if camData.skippedRenderOrigin:
+								camData.locationXFrames.extend((previousTime, camData.lastRenderOrigin.x))
+								camData.locationYFrames.extend((previousTime, camData.lastRenderOrigin.y))
+								camData.locationZFrames.extend((previousTime, camData.lastRenderOrigin.z))
+								camData.skippedRenderOrigin = False
+							if self.interKey:
+								afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, camData.locationXFrames, camData.locationYFrames, camData.locationZFrames)
+							camData.locationXFrames.extend((currentTime, renderOrigin.x))
+							camData.locationYFrames.extend((currentTime, renderOrigin.y))
+							camData.locationZFrames.extend((currentTime, renderOrigin.z))
+							camData.lastRenderOrigin = renderOrigin
+						
+						if camData.lastRenderRotQuat is not None and (renderRotQuat-camData.lastRenderRotQuat).magnitude < 1e-4:
+							camData.skippedRenderRotQuat = True
+						else:
+							if camData.skippedRenderRotQuat:
+								camData.rotationWFrames.extend((previousTime, camData.lastRenderRotQuat.w))
+								camData.rotationXFrames.extend((previousTime, camData.lastRenderRotQuat.x))
+								camData.rotationYFrames.extend((previousTime, camData.lastRenderRotQuat.y))
+								camData.rotationZFrames.extend((previousTime, camData.lastRenderRotQuat.z))
+								camData.skippedRenderRotQuat = False
+							if self.interKey:
+								afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, camData.rotationWFrames, camData.rotationXFrames, camData.rotationYFrames, camData.rotationZFrames)
+							camData.rotationWFrames.extend((currentTime, renderRotQuat.w))
+							camData.rotationXFrames.extend((currentTime, renderRotQuat.x))
+							camData.rotationYFrames.extend((currentTime, renderRotQuat.y))
+							camData.rotationZFrames.extend((currentTime, renderRotQuat.z))
+							camData.lastRenderRotQuat = renderRotQuat
+						
+						if camData.lastLens is not None and abs(lens-camData.lastLens) < 1e-4:
+							camData.skippedLens = True
+						else:
+							if camData.skippedLens:
+								camData.lensFrames.extend((previousTime, camData.lastLens))
+								camData.skippedLens = False
+							if self.interKey:
+								afx_utils.AppendInterKeys_Value(currentTime, lens, camData.lensFrames)
+							camData.lensFrames.extend((currentTime, lens))
+							camData.lastLens = lens
 					
-					camData.locationXFrames.extend((currentTime, renderOrigin.x))
-					camData.locationYFrames.extend((currentTime, renderOrigin.y))
-					camData.locationZFrames.extend((currentTime, renderOrigin.z))
-					
-					camData.rotationWFrames.extend((currentTime, renderRotQuat.w))
-					camData.rotationXFrames.extend((currentTime, renderRotQuat.x))
-					camData.rotationYFrames.extend((currentTime, renderRotQuat.y))
-					camData.rotationZFrames.extend((currentTime, renderRotQuat.z))
-					
-					camData.lensFrames.extend((currentTime, lens))
-				
+					else:
+						if self.interKey:
+							afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, camData.locationXFrames, camData.locationYFrames, camData.locationZFrames)
+							afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, camData.rotationWFrames, camData.rotationXFrames, camData.rotationYFrames, camData.rotationZFrames)
+							afx_utils.AppendInterKeys_Value(currentTime, lens, camData.lensFrames)
+						
+						camData.locationXFrames.extend((currentTime, renderOrigin.x))
+						camData.locationYFrames.extend((currentTime, renderOrigin.y))
+						camData.locationZFrames.extend((currentTime, renderOrigin.z))
+						
+						camData.rotationWFrames.extend((currentTime, renderRotQuat.w))
+						camData.rotationXFrames.extend((currentTime, renderRotQuat.x))
+						camData.rotationYFrames.extend((currentTime, renderRotQuat.y))
+						camData.rotationZFrames.extend((currentTime, renderRotQuat.z))
+						
+						camData.lensFrames.extend((currentTime, lens))
+						
+						camData.lastRenderRotQuat = renderRotQuat
 				else:
 					self.warning('Unknown packet at '+str(file.tell()))
 					return result
