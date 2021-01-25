@@ -4,7 +4,7 @@ You need to install latest Blender Source Tools first
 ( http://steamreview.org/BlenderSourceTools/ ),
 since we depend on it.
 This version of afx-blender-scripts was tested using
-Blender Source Tools Blender Source Tools 3.0.3 and 3.1.0.
+Blender Source Tools 3.1.0.
 
 If you have a previous version of afx-blender-scripts installed, uninstall
 it first through Blender!
@@ -52,9 +52,36 @@ Notice:
 The interpolation is set to CONSTANT for everything, because
 Blender doesn't support proper interpolation of curves for quaternions yet.
 
+For more informations visit it's Advancedfx Wiki page ( https://github.com/advancedfx/advancedfx/wiki/Source:mirv_agr )
 
 
 Changelog:
+
+1.12.0 (2020-09-11T06:30Z):
+- Use faster foreach_set for keyframe interpolation in 2.90+. Thanks to @Lasa01.
+
+1.11.2 (2020-08-28T21:19Z):
+- added "Documentation" button
+- added "Report a Bug" button
+- added AGR batch .FBX export 
+
+1.11.0 (2020-08-11T19:28Z):
+- Updated HLAE AGR Import to agr version 5
+
+1.10.4 (2020-08-10T09:21Z):
+- skip LOD meshes for Team Fortress 2. Thanks to @Lasa01 for using his code
+- fixed a character issue for Linux. Thanks to @AgenteDog for doing it real quick
+
+1.10.2 (2020-05-22T16:54Z):
+- Fixed BVH Export.
+
+1.10.0 (2020-05-13T14:55Z) (by lasa01):
+(Many thanks, also for answering annoying questions about pull-request.)
+- Read agr keyframes into memory and add all at once (faster).
+- Make sure bone rotations take shortest path.
+- User-selectable keyframe interpolation mode (agr): Bezier is much faster than constant but not recommended for beginners that don't get project FPS right 100%.
+- Reduce import logging spam.
+- Fix modelHandle reusing not selecting closest one.
 
 1.9.8 (2020-05-09T13:01Z) (by Devostated):
 - Support for Blender Source Tools 3.1.0 Test version:

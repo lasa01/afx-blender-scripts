@@ -10,6 +10,8 @@ import traceback
 import bpy, bpy.props, bpy.ops, time
 import mathutils
 
+from os.path import splitext, basename
+
 from io_scene_valvesource import import_smd as vs_import_smd, utils as vs_utils
 
 from advancedfx import utils as afx_utils
@@ -23,7 +25,7 @@ class SmdImporterEx(vs_import_smd.SmdImporter):
 	
 	qc = None
 	smd = None
-	bSkipPhysics = False
+	bSkip = False
 
 	# Properties used by the file browser
 	filepath : bpy.props.StringProperty(name="File Path", description="File filepath used for importing the SMD/VTA/DMX/QC file", maxlen=1024, default="", options={'HIDDEN'})
@@ -63,7 +65,7 @@ class SmdImporterEx(vs_import_smd.SmdImporter):
 		super(SmdImporterEx, self).readShapes()
         
 	def readSMD(self, filepath, upAxis, rotMode, newscene = False, smd_type = None, target_layer = 0):
-		if SmdImporterEx.bSkipPhysics and smd_type == vs_utils.PHYS:
+		if SmdImporterEx.bSkip and (smd_type == vs_utils.PHYS or splitext(basename(filepath))[0].rstrip("123456789").endswith("_lod")):
 			return 0
 		else:
 			return super().readSMD(filepath, upAxis, rotMode, newscene, smd_type, target_layer) # call parent method
@@ -228,6 +230,7 @@ class ModelHandle:
 		self.boneSkippedRenderOrigins = defaultdict(lambda: False)
 		self.boneLastRenderRotQuats = {}
 		self.boneSkippedRenderRotQuats = defaultdict(lambda: False)
+		self.camData = None
 
 		# We are lazy, so we use frame 0 to set as not visible (initially) / hide_render 1:
 		self.visibilityFrames = [0, 1]
@@ -338,8 +341,8 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 		default=False,
 	)
 	
-	bSkipPhysics: bpy.props.BoolProperty(
-		name="Skip Physic Meshes",
+	bSkip: bpy.props.BoolProperty(
+		name="Skip Physic and LOD Meshes",
 		description="Skips the import of physic (collision) meshes if the .qc contains them.",
 		default = True
 	)
@@ -356,11 +359,11 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 	
 	keyframeInterpolation: bpy.props.EnumProperty(
 		name="Keyframe interpolation",
-		description="Constant recommended for beginners. Advanced users can choose Bezier for significantly faster import times.",
+		description="Constant recommended for beginners." if afx_utils.NEWER_THAN_290 else "Constant recommended for beginners. Advanced users can choose Bezier for significantly faster import times.",
 		items=[
 			('CONSTANT', "Constant (recommended)", "No interpolation"),
 			('LINEAR', "Linear", "Linear interpolation"),
-			('BEZIER', "Bezier (fast import)", "Smooth interpolation"),
+			('BEZIER', "Bezier" if afx_utils.NEWER_THAN_290 else "Bezier (fast import)", "Smooth interpolation"),
 		],
 		default='CONSTANT'
 	)
@@ -515,12 +518,11 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 		if modelData is None:
 			# No instance we are allowed to use, so import it for real:
 		
-			filePath = self.assetPath.rstrip("/\\") + "/" +modelHandle.modelName
+			filePath = self.assetPath.rstrip("/\\") + "/" +modelHandle.modelName.lower()
 			filePath = os.path.splitext(filePath)[0]
-			filePath = filePath + "/" + os.path.basename(filePath) + ".qc"
-			filePath = filePath.replace("/", "\\")
+			filePath = filePath + "/" + os.path.basename(filePath).lower() + ".qc"
 			
-			SmdImporterEx.bSkipPhysics = self.bSkipPhysics
+			SmdImporterEx.bSkip = self.bSkip
 			GAgrImporter.smd = None
 			GAgrImporter.onlyBones = self.onlyBones
 			modelData = None
@@ -634,7 +636,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 				self.error('Invalid file format.')
 				return result
 				
-			if 4 != version:
+			if 5 != version:
 				self.error('Version '+str(version)+' is not supported!')
 				return result
 				
@@ -954,6 +956,91 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 										
 										modelHandle.boneLastRenderRotQuats[i] = renderRotQuat
 					
+					if dict.Peekaboo(file,'camera'):
+						thidPerson = ReadBool(file)
+						pos = ReadVector(file, quakeFormat=True)
+						rot = ReadQAngle(file)
+						fov = ReadFloat(file)
+						
+						modelCamData = modelHandle.camData
+						if modelHandle.camData is None:
+							modelCamData = self.createCamera(context,"camera."+str(modelHandle.objNr))
+							modelHandle.camData = modelCamData
+						
+						lens = modelCamData.c.sensor_width / (2.0 * math.tan(math.radians(fov) / 2.0))
+						
+						renderOrigin = pos * self.global_scale
+						renderRotQuat = rot.to_quaternion() @ self.blenderCamUpQuat
+						
+						# make sure we take the shortest path:
+						if modelCamData.lastRenderRotQuat is not None:
+							dot = modelCamData.lastRenderRotQuat.dot(renderRotQuat)
+							if dot < 0:
+								renderRotQuat.negate()
+						
+						if self.skipDuplicateKeyframes:
+							if modelCamData.lastRenderOrigin is not None and (renderOrigin-modelCamData.lastRenderOrigin).length < 1e-4:
+								modelCamData.skippedRenderOrigin = True
+							else:
+								if modelCamData.skippedRenderOrigin:
+									modelCamData.locationXFrames.extend((previousTime, modelCamData.lastRenderOrigin.x))
+									modelCamData.locationYFrames.extend((previousTime, modelCamData.lastRenderOrigin.y))
+									modelCamData.locationZFrames.extend((previousTime, modelCamData.lastRenderOrigin.z))
+									modelCamData.skippedRenderOrigin = False
+								if self.interKey:
+									afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelCamData.locationXFrames, modelCamData.locationYFrames, modelCamData.locationZFrames)
+								modelCamData.locationXFrames.extend((currentTime, renderOrigin.x))
+								modelCamData.locationYFrames.extend((currentTime, renderOrigin.y))
+								modelCamData.locationZFrames.extend((currentTime, renderOrigin.z))
+								modelCamData.lastRenderOrigin = renderOrigin
+							
+							if modelCamData.lastRenderRotQuat is not None and (renderRotQuat-modelCamData.lastRenderRotQuat).magnitude < 1e-4:
+								modelCamData.skippedRenderRotQuat = True
+							else:
+								if modelCamData.skippedRenderRotQuat:
+									modelCamData.rotationWFrames.extend((previousTime, modelCamData.lastRenderRotQuat.w))
+									modelCamData.rotationXFrames.extend((previousTime, modelCamData.lastRenderRotQuat.x))
+									modelCamData.rotationYFrames.extend((previousTime, modelCamData.lastRenderRotQuat.y))
+									modelCamData.rotationZFrames.extend((previousTime, modelCamData.lastRenderRotQuat.z))
+									modelCamData.skippedRenderRotQuat = False
+								if self.interKey:
+									afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelCamData.rotationWFrames, modelCamData.rotationXFrames, modelCamData.rotationYFrames, modelCamData.rotationZFrames)
+								modelCamData.rotationWFrames.extend((currentTime, renderRotQuat.w))
+								modelCamData.rotationXFrames.extend((currentTime, renderRotQuat.x))
+								modelCamData.rotationYFrames.extend((currentTime, renderRotQuat.y))
+								modelCamData.rotationZFrames.extend((currentTime, renderRotQuat.z))
+								modelCamData.lastRenderRotQuat = renderRotQuat
+							
+							if modelCamData.lastLens is not None and abs(lens-modelCamData.lastLens) < 1e-4:
+								modelCamData.skippedLens = True
+							else:
+								if modelCamData.skippedLens:
+									modelCamData.lensFrames.extend((previousTime, modelCamData.lastLens))
+									modelCamData.skippedLens = False
+								if self.interKey:
+									afx_utils.AppendInterKeys_Value(currentTime, lens, modelCamData.lensFrames)
+								modelCamData.lensFrames.extend((currentTime, lens))
+								modelCamData.lastLens = lens
+						
+						else:
+							if self.interKey:
+								afx_utils.AppendInterKeys_Location(currentTime, renderOrigin, modelCamData.locationXFrames, modelCamData.locationYFrames, modelCamData.locationZFrames)
+								afx_utils.AppendInterKeys_Rotation(currentTime, renderRotQuat, modelCamData.rotationWFrames, modelCamData.rotationXFrames, modelCamData.rotationYFrames, modelCamData.rotationZFrames)
+								afx_utils.AppendInterKeys_Value(currentTime, lens, modelCamData.lensFrames)
+							
+							modelCamData.locationXFrames.extend((currentTime, renderOrigin.x))
+							modelCamData.locationYFrames.extend((currentTime, renderOrigin.y))
+							modelCamData.locationZFrames.extend((currentTime, renderOrigin.z))
+							
+							modelCamData.rotationWFrames.extend((currentTime, renderRotQuat.w))
+							modelCamData.rotationXFrames.extend((currentTime, renderRotQuat.x))
+							modelCamData.rotationYFrames.extend((currentTime, renderRotQuat.y))
+							modelCamData.rotationZFrames.extend((currentTime, renderRotQuat.z))
+							
+							modelCamData.lensFrames.extend((currentTime, lens))
+							
+							modelCamData.lastRenderRotQuat = renderRotQuat
+					
 					dict.Peekaboo(file,'/')
 					
 					viewModel = ReadBool(file)
@@ -1058,6 +1145,11 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 			
 			totalFrames = 0
 			for modelHandle in modelHandles:
+				modelCamData = modelHandle.camData
+				if modelCamData is not None:
+					totalFrames += len(modelCamData.locationXFrames) * 3
+					totalFrames += len(modelCamData.rotationWFrames) * 4
+					totalFrames += len(modelCamData.lensFrames)
 				totalFrames += len(modelHandle.visibilityFrames)
 				totalFrames += len(modelHandle.locationXFrames) * 3
 				totalFrames += len(modelHandle.rotationWFrames) * 4
@@ -1079,6 +1171,15 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 				context.window_manager.progress_update(0.5 + val * 0.5)
 			
 			for modelHandle in modelHandles:
+				modelCamData = modelHandle.camData
+				if modelCamData is not None:
+					curves = modelCamData.curves
+					afx_utils.AddKeysList_Location(self.keyframeInterpolation, curves[0].keyframe_points, curves[1].keyframe_points, curves[2].keyframe_points, modelCamData.locationXFrames, modelCamData.locationYFrames, modelCamData.locationZFrames)
+					afx_utils.AddKeysList_Rotation(self.keyframeInterpolation, curves[3].keyframe_points, curves[4].keyframe_points, curves[5].keyframe_points, curves[6].keyframe_points, modelCamData.rotationWFrames, modelCamData.rotationXFrames, modelCamData.rotationYFrames, modelCamData.rotationZFrames)
+					afx_utils.AddKeysList_Value(self.keyframeInterpolation, curves[7].keyframe_points, modelCamData.lensFrames)
+					updateImportProgress(len(modelCamData.locationXFrames) * 3 + len(modelCamData.rotationWFrames) * 4 + len(modelCamData.lensFrames))
+					for curve in curves:
+						curve.update()
 				if modelHandle.modelData is None:
 					continue
 				curves = modelHandle.modelData.curves
