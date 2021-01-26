@@ -654,6 +654,8 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 			
 			objNr = 0
 			
+			duplicateThreshold = 1e-4
+			
 			while True:
 			
 				if 0 < fileSize and 0 == stupidCount % 100:
@@ -806,7 +808,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 								if invisible != modelHandle.lastInvisible:
 									modelHandle.visibilityFrames.extend((currentTime, invisible))
 								
-								if modelHandle.lastRenderOrigin is not None and (renderOrigin-modelHandle.lastRenderOrigin).length < 1e-4:
+								if modelHandle.lastRenderOrigin is not None and (renderOrigin-modelHandle.lastRenderOrigin).length < duplicateThreshold:
 									modelHandle.skippedRenderOrigin = True
 								else:
 									if modelHandle.skippedRenderOrigin:
@@ -821,7 +823,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 									modelHandle.locationZFrames.extend((currentTime, renderOrigin.z))
 									modelHandle.lastRenderOrigin = renderOrigin
 								
-								if modelHandle.lastRenderRotQuat is not None and (renderRotQuat-modelHandle.lastRenderRotQuat).magnitude < 1e-4:
+								if modelHandle.lastRenderRotQuat is not None and (renderRotQuat-modelHandle.lastRenderRotQuat).magnitude < duplicateThreshold:
 									modelHandle.skippedRenderRotQuat = True
 								else:
 									if modelHandle.skippedRenderRotQuat:
@@ -908,7 +910,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 									
 									if self.skipDuplicateKeyframes:
 										lastRenderOrigin = modelHandle.boneLastRenderOrigins.get(i, None)
-										if lastRenderOrigin is not None and (renderOrigin-lastRenderOrigin).length < 1e-4:
+										if lastRenderOrigin is not None and (renderOrigin-lastRenderOrigin).length < duplicateThreshold:
 											modelHandle.boneSkippedRenderOrigins[i] = True
 										else:
 											if modelHandle.boneSkippedRenderOrigins[i]:
@@ -923,7 +925,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 											modelHandle.boneLocationZFrames[i].extend((currentTime, renderOrigin.z))
 											modelHandle.boneLastRenderOrigins[i] = renderOrigin
 										
-										if lastRenderRotQuat is not None and (renderRotQuat-lastRenderRotQuat).magnitude < 1e-4:
+										if lastRenderRotQuat is not None and (renderRotQuat-lastRenderRotQuat).magnitude < duplicateThreshold:
 											modelHandle.boneSkippedRenderRotQuats[i] = True
 										else:
 											if modelHandle.boneSkippedRenderRotQuats[i]:
@@ -979,7 +981,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 								renderRotQuat.negate()
 						
 						if self.skipDuplicateKeyframes:
-							if modelCamData.lastRenderOrigin is not None and (renderOrigin-modelCamData.lastRenderOrigin).length < 1e-4:
+							if modelCamData.lastRenderOrigin is not None and (renderOrigin-modelCamData.lastRenderOrigin).length < duplicateThreshold:
 								modelCamData.skippedRenderOrigin = True
 							else:
 								if modelCamData.skippedRenderOrigin:
@@ -994,7 +996,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 								modelCamData.locationZFrames.extend((currentTime, renderOrigin.z))
 								modelCamData.lastRenderOrigin = renderOrigin
 							
-							if modelCamData.lastRenderRotQuat is not None and (renderRotQuat-modelCamData.lastRenderRotQuat).magnitude < 1e-4:
+							if modelCamData.lastRenderRotQuat is not None and (renderRotQuat-modelCamData.lastRenderRotQuat).magnitude < duplicateThreshold:
 								modelCamData.skippedRenderRotQuat = True
 							else:
 								if modelCamData.skippedRenderRotQuat:
@@ -1011,7 +1013,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 								modelCamData.rotationZFrames.extend((currentTime, renderRotQuat.z))
 								modelCamData.lastRenderRotQuat = renderRotQuat
 							
-							if modelCamData.lastLens is not None and abs(lens-modelCamData.lastLens) < 1e-4:
+							if modelCamData.lastLens is not None and abs(lens-modelCamData.lastLens) < duplicateThreshold:
 								modelCamData.skippedLens = True
 							else:
 								if modelCamData.skippedLens:
@@ -1078,7 +1080,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 					#vs_utils.select_only( camData.o )
 					
 					if self.skipDuplicateKeyframes:
-						if camData.lastRenderOrigin is not None and (renderOrigin-camData.lastRenderOrigin).length < 1e-4:
+						if camData.lastRenderOrigin is not None and (renderOrigin-camData.lastRenderOrigin).length < duplicateThreshold:
 							camData.skippedRenderOrigin = True
 						else:
 							if camData.skippedRenderOrigin:
@@ -1093,7 +1095,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 							camData.locationZFrames.extend((currentTime, renderOrigin.z))
 							camData.lastRenderOrigin = renderOrigin
 						
-						if camData.lastRenderRotQuat is not None and (renderRotQuat-camData.lastRenderRotQuat).magnitude < 1e-4:
+						if camData.lastRenderRotQuat is not None and (renderRotQuat-camData.lastRenderRotQuat).magnitude < duplicateThreshold:
 							camData.skippedRenderRotQuat = True
 						else:
 							if camData.skippedRenderRotQuat:
@@ -1110,7 +1112,7 @@ class AgrImporter(bpy.types.Operator, vs_utils.Logger):
 							camData.rotationZFrames.extend((currentTime, renderRotQuat.z))
 							camData.lastRenderRotQuat = renderRotQuat
 						
-						if camData.lastLens is not None and abs(lens-camData.lastLens) < 1e-4:
+						if camData.lastLens is not None and abs(lens-camData.lastLens) < duplicateThreshold:
 							camData.skippedLens = True
 						else:
 							if camData.skippedLens:
